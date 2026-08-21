@@ -82,6 +82,11 @@
 
   <div class="banner" id="loadErrorBanner" style="display:none;"></div>
 
+  <label style="display:inline-flex;align-items:center;gap:6px;font-size:0.85rem;color:var(--muted);margin-bottom:18px;cursor:pointer;user-select:none;">
+    <input type="checkbox" id="oldEventsToggle">
+    Afficher aussi les activités d'avant septembre 2026 (ancien système de catégories)
+  </label>
+
   <div class="panel" id="adminGatePanel">
     <h2>Accès réservé au CA</h2>
     <p class="admin-note">Entrez le mot de passe de mise à jour pour ajouter, modifier ou retirer une activité ou une
@@ -102,6 +107,14 @@
       catégorie utilisée par au moins une activité ne peut pas être supprimée — modifiez d'abord les activités concernées.</p>
 
     <table class="admin-table" id="categoryTable" style="max-width:520px;"></table>
+
+    <details id="legacyCatDetails" style="margin-top:14px;">
+      <summary style="cursor:pointer;color:var(--muted);font-size:0.85rem;">Catégories héritées — utilisées seulement par des activités d'avant septembre 2026</summary>
+      <p class="admin-note" style="margin-top:8px;">Ces catégories appartiennent à l'ancien système. Elles restent tant que les activités d'avant
+        septembre 2026 qui s'y rattachent existent encore — ce n'est pas un problème, elles sont simplement listées à part pour ne pas encombrer le
+        tableau ci-dessus.</p>
+      <table class="admin-table" id="categoryTableLegacy" style="max-width:520px;"></table>
+    </details>
 
     <h3 style="font-size:0.92rem;margin:18px 0 10px;">Ajouter une catégorie</h3>
     <form id="categoryForm" class="form-grid" style="align-items:end;">
@@ -168,6 +181,10 @@
     passe requis). La page de consultation dédiée, plus soignée visuellement, sera ajoutée séparément une fois cette
     interface d'administration approuvée.</p>
 
+  <button type="button" id="exportExcelBtn" class="secondary">Télécharger en Excel (.xlsx)</button>
+  <p class="admin-note" style="margin-top:8px;">Génère un chiffrier avec toutes les activités actuelles, en grille par mois comme
+    l'ancien chiffrier — pratique pour Michel ou pour l'impression. Aucun mot de passe requis, ça ne touche pas à la base de données.</p>
+
   <div class="filters" id="filters"></div>
 
   <div id="calendar">
@@ -179,6 +196,7 @@
   </footer>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <script>
 // Remplacer par l'URL réelle du Worker une fois déployé (voir GUIDE-CONFIG-ADMIN.md, étape 6).
 const API_BASE = 'https://mmm-calendrier-api.roch-magnan.workers.dev';
@@ -196,6 +214,13 @@ let CAT_BY_KEY = {};
 let EVENTS = [];
 let editingId = null;
 let adminPassword = null; // gardé en mémoire seulement, jamais écrit sur disque ni dans l'URL
+
+// Date pivot du « virage » vers le nouveau système de catégories (voir migration-virage-septembre-2026.sql).
+// Par défaut, le tableau de gestion et l'aperçu ne montrent que les activités à compter de cette date —
+// les activités antérieures existent toujours dans la base, juste masquées pour ne pas encombrer l'affichage.
+const VIRAGE_DATE = '2026-09-01';
+let showOldEvents = false;
+function evenementsAffiches(){ return showOldEvents ? EVENTS : EVENTS.filter(e => e.start >= VIRAGE_DATE); }
 
 function reindexCategories(){ CAT_BY_KEY = Object.fromEntries(CATEGORIES.map(c => [c.key, c])); }
 
@@ -270,9 +295,12 @@ function renderFilters(){
 
 function renderCalendar(){
   const cal = document.getElementById('calendar');
-  const visible = EVENTS.filter(e => activeFilters.has(e.category)).slice().sort((a,b) => a.start.localeCompare(b.start));
+  const visible = evenementsAffiches().filter(e => activeFilters.has(e.category)).slice().sort((a,b) => a.start.localeCompare(b.start));
   if(!visible.length){
-    cal.innerHTML = '<div class="empty">Aucune activité pour les catégories sélectionnées.</div>';
+    const msg = showOldEvents
+      ? 'Aucune activité pour les catégories sélectionnées.'
+      : 'Aucune activité à compter de septembre 2026 pour ces catégories. (Les activités plus anciennes sont masquées — case à cocher en haut de page.)';
+    cal.innerHTML = `<div class="empty">${msg}</div>`;
     return;
   }
   const byMonth = {};
@@ -332,7 +360,7 @@ function renderCategorySelect(){
 
 function renderAdminTable(){
   const table = document.getElementById('adminTable');
-  const sorted = EVENTS.slice().sort((a,b) => a.start.localeCompare(b.start));
+  const sorted = evenementsAffiches().slice().sort((a,b) => a.start.localeCompare(b.start));
   const head = '<tr><th>Date</th><th>Titre</th><th>Type</th><th>Endroit</th><th>Actions</th></tr>';
   const body = sorted.map(e => `
     <tr>
@@ -346,7 +374,10 @@ function renderAdminTable(){
       </td>
     </tr>
   `).join('');
-  table.innerHTML = head + body;
+  const empty = !sorted.length
+    ? `<tr><td colspan="5" style="color:var(--muted);">Aucune activité${showOldEvents ? '' : ' à compter de septembre 2026'}.</td></tr>`
+    : '';
+  table.innerHTML = head + body + empty;
   table.querySelectorAll('button[data-action="edit"]').forEach(b => b.addEventListener('click', () => startEdit(Number(b.dataset.id))));
   table.querySelectorAll('button[data-action="delete"]').forEach(b => b.addEventListener('click', () => deleteEvent(Number(b.dataset.id))));
 }
@@ -452,26 +483,45 @@ async function deleteEvent(id){
 
 // ---------- Gérer les catégories (admin) ----------
 
+function catRowHtml(c){
+  // Le compte « utilisée par » porte toujours sur TOUTES les activités (pas seulement celles affichées),
+  // pour que le bouton Supprimer reste fiable même quand les activités d'avant septembre sont masquées.
+  const nbUsages = EVENTS.filter(e => e.category === c.key).length;
+  const enUsage = nbUsages > 0;
+  return `
+    <tr>
+      <td><span class="dot" style="display:inline-block;width:14px;height:14px;border-radius:50%;background:${c.color};"></span></td>
+      <td>${c.key}</td>
+      <td>${nbUsages} activité${nbUsages === 1 ? '' : 's'}</td>
+      <td class="actions">
+        <button type="button" class="danger" data-action="delete-cat" data-key="${c.key}" ${enUsage ? 'disabled title="Catégorie utilisée par au moins une activité — impossible à supprimer."' : ''}>Supprimer</button>
+      </td>
+    </tr>
+  `;
+}
+
 function renderCategoryTable(){
-  const table = document.getElementById('categoryTable');
   const head = '<tr><th>Couleur</th><th>Catégorie</th><th>Utilisée par</th><th>Actions</th></tr>';
-  const body = CATEGORIES.map(c => {
-    const nbUsages = EVENTS.filter(e => e.category === c.key).length;
-    const enUsage = nbUsages > 0;
-    return `
-      <tr>
-        <td><span class="dot" style="display:inline-block;width:14px;height:14px;border-radius:50%;background:${c.color};"></span></td>
-        <td>${c.key}</td>
-        <td>${nbUsages} activité${nbUsages === 1 ? '' : 's'}</td>
-        <td class="actions">
-          <button type="button" class="danger" data-action="delete-cat" data-key="${c.key}" ${enUsage ? 'disabled title="Catégorie utilisée par au moins une activité — impossible à supprimer."' : ''}>Supprimer</button>
-        </td>
-      </tr>
-    `;
-  }).join('');
-  table.innerHTML = head + body;
-  table.querySelectorAll('button[data-action="delete-cat"]').forEach(b => {
-    b.addEventListener('click', () => deleteCategory(b.dataset.key));
+
+  const current = [], legacy = [];
+  CATEGORIES.forEach(c => {
+    const nbRecent = EVENTS.filter(e => e.category === c.key && e.start >= VIRAGE_DATE).length;
+    const nbTotal = EVENTS.filter(e => e.category === c.key).length;
+    (nbTotal > 0 && nbRecent === 0 ? legacy : current).push(c);
+  });
+
+  const table = document.getElementById('categoryTable');
+  table.innerHTML = head + current.map(catRowHtml).join('');
+
+  const legacyDetails = document.getElementById('legacyCatDetails');
+  const tableLegacy = document.getElementById('categoryTableLegacy');
+  legacyDetails.style.display = legacy.length ? 'block' : 'none';
+  tableLegacy.innerHTML = head + legacy.map(catRowHtml).join('');
+
+  [table, tableLegacy].forEach(t => {
+    t.querySelectorAll('button[data-action="delete-cat"]').forEach(b => {
+      b.addEventListener('click', () => deleteCategory(b.dataset.key));
+    });
   });
 }
 
@@ -521,6 +571,120 @@ document.getElementById('categoryForm').addEventListener('submit', async e => {
   }
 });
 
+// ---------- Export Excel (.xlsx) — grille par mois, comme l'ancien chiffrier ----------
+
+const JOUR_LETTRE_FR = ['D', 'L', 'M', 'M', 'J', 'V', 'S']; // dim, lun, mar, mer, jeu, ven, sam (getDay())
+
+async function exporterExcel(){
+  const btn = document.getElementById('exportExcelBtn');
+  if(typeof ExcelJS === 'undefined'){
+    alert('La bibliothèque Excel n\'a pas pu se charger (connexion ?). Réessaie dans un instant.');
+    return;
+  }
+  if(!EVENTS.length){
+    alert('Aucune activité à exporter pour le moment.');
+    return;
+  }
+  const texteOriginal = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Génération…';
+  try {
+    // Toujours l'ensemble complet des activités, peu importe les filtres/cases cochées à l'écran —
+    // Michel veut voir « l'ensemble du calendrier ».
+    const parJour = {}; // 'AAAA-MM-JJ' -> [activités qui couvrent ce jour]
+    EVENTS.forEach(e => {
+      let d = fmtDate(e.start);
+      const fin = fmtDate(e.end);
+      while(d <= fin){
+        const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+        (parJour[key] = parJour[key] || []).push(e);
+        d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
+      }
+    });
+
+    // Couvre chaque mois entre la première et la dernière activité (même les mois sans rien, pour garder une grille continue).
+    const clesMois = [...new Set(EVENTS.map(e => { const d = fmtDate(e.start); return `${d.getFullYear()}-${d.getMonth()}`; }))]
+      .sort((a, b) => { const [ya, ma] = a.split('-').map(Number), [yb, mb] = b.split('-').map(Number); return ya - yb || ma - mb; });
+    const [anneeDebut, moisDebut] = clesMois[0].split('-').map(Number);
+    const [anneeFin, moisFin] = clesMois[clesMois.length - 1].split('-').map(Number);
+    const mois = [];
+    for(let y = anneeDebut, m = moisDebut; y < anneeFin || (y === anneeFin && m <= moisFin); m++){
+      if(m > 11){ m = 0; y++; }
+      mois.push({ annee: y, mois: m });
+    }
+
+    const argb = hex => 'FF' + hex.replace('#', '').toUpperCase();
+    const argbClair = hex => 'FF' + lighten(hex, 0.82).replace('#', '').toUpperCase();
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Calendrier des activités — MMM';
+    const ws = wb.addWorksheet('Calendrier');
+
+    mois.forEach((mo, i) => {
+      const c0 = i * 3;
+      ws.getRow(1).getCell(c0 + 1).value = `${MOIS_FR[mo.mois]} ${mo.annee}`;
+      ws.getRow(1).getCell(c0 + 1).font = { bold: true };
+
+      const nbJours = new Date(mo.annee, mo.mois + 1, 0).getDate();
+      for(let jour = 1; jour <= nbJours; jour++){
+        const rowIdx = 1 + jour;
+        const d = new Date(mo.annee, mo.mois, jour);
+        const key = `${mo.annee}-${String(mo.mois + 1).padStart(2, '0')}-${String(jour).padStart(2, '0')}`;
+        const evsJour = parJour[key] || [];
+        const row = ws.getRow(rowIdx);
+        row.getCell(c0 + 1).value = jour;
+        row.getCell(c0 + 2).value = JOUR_LETTRE_FR[d.getDay()];
+        if(evsJour.length){
+          const cellTxt = row.getCell(c0 + 3);
+          cellTxt.value = evsJour.map(e => e.text + (e.lieu ? ` — ${e.lieu}` : '')).join('\n');
+          cellTxt.alignment = { wrapText: true, vertical: 'top' };
+          const cat = CAT_BY_KEY[evsJour[0].category];
+          if(cat){
+            const fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argbClair(cat.color) } };
+            row.getCell(c0 + 1).fill = fill;
+            row.getCell(c0 + 2).fill = fill;
+            cellTxt.fill = fill;
+          }
+        }
+      }
+      ws.getColumn(c0 + 1).width = 4;
+      ws.getColumn(c0 + 2).width = 4;
+      ws.getColumn(c0 + 3).width = 34;
+    });
+
+    // Deuxième onglet — légende des catégories et leur couleur.
+    const wsLeg = wb.addWorksheet('Catégories');
+    wsLeg.getRow(1).values = ['Catégorie', 'Couleur'];
+    wsLeg.getRow(1).font = { bold: true };
+    CATEGORIES.forEach((c, idx) => {
+      const r = wsLeg.getRow(idx + 2);
+      r.getCell(1).value = c.key;
+      r.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argb(c.color) } };
+    });
+    wsLeg.getColumn(1).width = 34;
+    wsLeg.getColumn(2).width = 12;
+
+    const buffer = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Calendrier-activites-MMM-${TODAY}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch(err){
+    console.error(err);
+    alert('Une erreur est survenue pendant la génération du fichier Excel. Réessaie, ou avise Roch si ça persiste.');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = texteOriginal;
+  }
+}
+
+document.getElementById('exportExcelBtn').addEventListener('click', exporterExcel);
+
 // ---------- Verrouillage ----------
 
 function verrouiller(){
@@ -547,6 +711,12 @@ document.getElementById('adminUnlockBtn').addEventListener('click', () => {
 document.getElementById('adminPwInput').addEventListener('keydown', e => { if(e.key === 'Enter') document.getElementById('adminUnlockBtn').click(); });
 
 document.getElementById('adminLockBtn').addEventListener('click', verrouiller);
+
+document.getElementById('oldEventsToggle').addEventListener('change', e => {
+  showOldEvents = e.target.checked;
+  renderCalendar();
+  if(adminPassword) renderAdminTable();
+});
 
 chargerEtat();
 </script>
