@@ -140,6 +140,16 @@
           <label for="fFin">Date de fin (si plusieurs jours)</label>
           <input type="date" id="fFin">
         </div>
+        <div class="field-row">
+          <label for="fEndroit">Endroit (optionnel)</label>
+          <select id="fEndroit">
+            <option value="">— Aucun / non applicable —</option>
+            <option value="Centre Pierre-Marquette">Centre Pierre-Marquette</option>
+            <option value="Centre Jean Rougeau">Centre Jean Rougeau</option>
+            <option value="Loisirs Communautaires Saint-Michel (LCSM)">Loisirs Communautaires Saint-Michel (LCSM)</option>
+            <option value="Endroit à déterminer">Endroit à déterminer</option>
+          </select>
+        </div>
       </div>
       <div class="form-actions">
         <button type="submit" id="fSubmitBtn">Ajouter au calendrier</button>
@@ -217,7 +227,7 @@ const JOURS_FR = ['dim','lun','mar','mer','jeu','ven','sam'];
 function appliquerEtat(etat){
   CATEGORIES = etat.categories.map(c => ({ key: c.nom, color: c.couleur }));
   reindexCategories();
-  EVENTS = etat.activites.map(a => ({ id: a.id, text: a.titre, category: a.categorie, start: a.date_debut, end: a.date_fin }));
+  EVENTS = etat.activites.map(a => ({ id: a.id, text: a.titre, category: a.categorie, start: a.date_debut, end: a.date_fin, lieu: a.endroit || '' }));
   CATEGORIES.forEach(c => { if(!activeFilters.has(c.key)) activeFilters.add(c.key); });
 }
 
@@ -297,6 +307,7 @@ function renderCalendar(){
           <div class="event-body">
             <div class="event-title">${e.text}${isToday ? '<span class="today-flag">AUJOURD\'HUI</span>' : ''}</div>
             <span class="event-tag" style="background:${lighten(cat.color)};color:${cat.color}">${e.category}</span>
+            ${e.lieu ? `<div style="font-size:0.72rem;color:var(--muted);margin-top:3px;">${e.lieu}</div>` : ''}
           </div>
         </div>
       `;
@@ -322,12 +333,13 @@ function renderCategorySelect(){
 function renderAdminTable(){
   const table = document.getElementById('adminTable');
   const sorted = EVENTS.slice().sort((a,b) => a.start.localeCompare(b.start));
-  const head = '<tr><th>Date</th><th>Titre</th><th>Type</th><th>Actions</th></tr>';
+  const head = '<tr><th>Date</th><th>Titre</th><th>Type</th><th>Endroit</th><th>Actions</th></tr>';
   const body = sorted.map(e => `
     <tr>
       <td>${fmtDateShort(e.start)}${e.end !== e.start ? ' → ' + fmtDateShort(e.end) : ''}</td>
       <td>${e.text}</td>
       <td>${e.category}</td>
+      <td>${e.lieu || '—'}</td>
       <td class="actions">
         <button type="button" data-action="edit" data-id="${e.id}">Modifier</button>
         <button type="button" class="danger" data-action="delete" data-id="${e.id}">Supprimer</button>
@@ -355,6 +367,7 @@ function startEdit(id){
   document.getElementById('fCategorie').value = e.category;
   document.getElementById('fDebut').value = e.start;
   document.getElementById('fFin').value = e.end !== e.start ? e.end : '';
+  document.getElementById('fEndroit').value = e.lieu || '';
   document.getElementById('formTitle').textContent = 'Modifier l\'activité';
   document.getElementById('fSubmitBtn').textContent = 'Enregistrer les modifications';
   document.getElementById('fCancelBtn').style.display = 'inline-block';
@@ -393,6 +406,7 @@ document.getElementById('eventForm').addEventListener('submit', async e => {
   const categorie = document.getElementById('fCategorie').value;
   const debut = document.getElementById('fDebut').value;
   const fin = document.getElementById('fFin').value || debut;
+  const endroit = document.getElementById('fEndroit').value || null;
   const btn = document.getElementById('fSubmitBtn');
   if(!titre || !debut) return;
   if(fin < debut){ alert('La date de fin doit être après la date de début.'); return; }
@@ -400,8 +414,8 @@ document.getElementById('eventForm').addEventListener('submit', async e => {
   btn.disabled = true;
   try {
     const payload = editingId
-      ? { action: 'modifier', id: editingId, titre, categorie, dateDebut: debut, dateFin: fin }
-      : { action: 'ajouter', titre, categorie, dateDebut: debut, dateFin: fin };
+      ? { action: 'modifier', id: editingId, titre, categorie, dateDebut: debut, dateFin: fin, endroit }
+      : { action: 'ajouter', titre, categorie, dateDebut: debut, dateFin: fin, endroit };
     const etat = await appelApi(API_URL_ACTIVITES, payload);
     appliquerEtat(etat);
     resetForm();
