@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Calendrier des activités — MMM</title>
+<style>
+  :root{
+    --ink:#1f2933; --muted:#5a6672; --line:#dde3e8; --bg:#f7f8fa; --panel:#ffffff;
+    --today-bg:#fff8e6; --today-line:#e8d38a; --warn:#b5471b; --warn-bg:#fdece3;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);line-height:1.4;}
+  .wrap{max-width:820px;margin:0 auto;padding:24px 18px 60px;}
+  header h1{font-size:1.35rem;margin:0 0 4px;}
+  header .sub{color:var(--muted);font-size:0.92rem;margin:0 0 18px;}
+  .banner{background:#eef0f2;border:1px solid var(--line);color:var(--muted);padding:10px 14px;border-radius:8px;font-size:0.83rem;margin-bottom:20px;}
+  .banner b{color:var(--ink);}
+  .banner.erreur{background:var(--warn-bg);border-color:#e3a583;color:var(--warn);}
+
+  .month-filter-row{display:flex;align-items:center;gap:10px;margin-bottom:14px;font-size:0.85rem;color:var(--muted);flex-wrap:wrap;}
+  .month-filter-row select{font:inherit;padding:6px 10px;border-radius:7px;border:1px solid var(--line);background:#fff;color:var(--ink);}
+  .past-toggle{display:inline-flex;align-items:center;gap:6px;cursor:pointer;user-select:none;}
+  .past-toggle input{cursor:pointer;}
+  .filters{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:22px;}
+  .chip{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;border:1px solid var(--line);
+        background:#fff;font-size:0.8rem;cursor:pointer;user-select:none;color:var(--ink);transition:opacity .12s;}
+  .chip .dot{width:9px;height:9px;border-radius:50%;display:inline-block;}
+  .chip.off{opacity:0.35;}
+
+  .month-group{margin-bottom:26px;}
+  .month-head{font-size:1rem;font-weight:700;text-transform:capitalize;margin:0 0 10px;padding-bottom:6px;border-bottom:2px solid var(--line);
+              position:sticky;top:0;background:var(--bg);padding-top:6px;}
+
+  .event-row{display:flex;gap:14px;align-items:flex-start;padding:9px 4px;border-radius:8px;}
+  .event-row + .event-row{border-top:1px dashed var(--line);}
+  .event-row.today{background:var(--today-bg);border:1px solid var(--today-line);border-top:1px solid var(--today-line);margin:2px 0;padding:9px 10px;}
+  .date-badge{flex:0 0 58px;text-align:center;padding-top:1px;}
+  .date-badge .num{font-size:1.05rem;font-weight:700;line-height:1;}
+  .date-badge .dow{font-size:0.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.03em;}
+  .date-badge .range{font-size:0.66rem;color:var(--muted);margin-top:2px;}
+  .event-body{flex:1;min-width:0;}
+  .event-title{font-size:0.92rem;font-weight:500;}
+  .event-tag{display:inline-block;margin-top:4px;font-size:0.72rem;padding:2px 8px;border-radius:5px;}
+  .today-flag{font-size:0.7rem;font-weight:700;color:#a8621b;margin-left:6px;}
+
+  .empty{color:var(--muted);font-size:0.88rem;padding:20px 0;text-align:center;}
+  footer{color:var(--muted);font-size:0.78rem;margin-top:30px;border-top:1px solid var(--line);padding-top:14px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Calendrier des activités</h1>
+    <p class="sub">Moucheurs du Montréal Métropolitain — Hiver, printemps, été 2026</p>
+  </header>
+
+  <div class="banner" id="loadErrorBanner" style="display:none;"></div>
+
+  <div class="filters" id="filters"></div>
+
+  <div class="month-filter-row">
+    <label for="monthSelect">Mois :</label>
+    <select id="monthSelect"></select>
+    <label class="past-toggle"><input type="checkbox" id="pastToggle"> Afficher les mois passés</label>
+  </div>
+
+  <div id="calendar">
+    <div class="empty">Chargement du calendrier…</div>
+  </div>
+
+  <footer>
+    Calendrier des activités — Moucheurs du Montréal Métropolitain. Mis à jour par le CA.
+  </footer>
+</div>
+
+<script>
+const API_BASE = 'https://mmm-calendrier-api.roch-magnan.workers.dev';
+const API_URL_ACTIVITES = API_BASE + '/api/activites';
+
+const TODAY = new Date().toISOString().slice(0, 10);
+
+let CATEGORIES = [];
+let CAT_BY_KEY = {};
+let EVENTS = [];
+
+function hexToRgb(hex){
+  const h = hex.replace('#','');
+  return { r: parseInt(h.slice(0,2),16), g: parseInt(h.slice(2,4),16), b: parseInt(h.slice(4,6),16) };
+}
+function lighten(hex, amt=0.85){
+  const {r,g,b} = hexToRgb(hex);
+  const mix = c => Math.round(c + (255-c)*amt).toString(16).padStart(2,'0');
+  return `#${mix(r)}${mix(g)}${mix(b)}`;
+}
+
+const MOIS_FR = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
+const JOURS_FR = ['dim','lun','mar','mer','jeu','ven','sam'];
+
+const activeFilters = new Set();
+let selectedMonth = 'all';
+let showPastMonths = false;
+
+function fmtDate(iso){
+  const [y,m,d] = iso.split('-').map(Number);
+  return new Date(y, m-1, d);
+}
+function currentMonthKey(){
+  const d = fmtDate(TODAY);
+  return `${d.getFullYear()}-${d.getMonth()}`;
+}
+function isPastMonth(key){
+  const [ya,ma] = key.split('-').map(Number);
+  const [yc,mc] = currentMonthKey().split('-').map(Number);
+  return ya < yc || (ya === yc && ma < mc);
+}
+
+async function chargerEtat(){
+  try {
+    const res = await fetch(API_URL_ACTIVITES, { method: 'GET' });
+    if(!res.ok) throw new Error('reponse non ok');
+    const etat = await res.json();
+    CATEGORIES = etat.categories.map(c => ({ key: c.nom, color: c.couleur }));
+    CAT_BY_KEY = Object.fromEntries(CATEGORIES.map(c => [c.key, c]));
+    EVENTS = etat.activites.map(a => ({ id: a.id, text: a.titre, category: a.categorie, start: a.date_debut, end: a.date_fin }));
+    CATEGORIES.forEach(c => activeFilters.add(c.key));
+    document.getElementById('loadErrorBanner').style.display = 'none';
+    renderFilters();
+    renderMonthSelect();
+    renderCalendar();
+  } catch(err){
+    const banner = document.getElementById('loadErrorBanner');
+    banner.className = 'banner erreur';
+    banner.style.display = 'block';
+    banner.textContent = 'Impossible de charger le calendrier pour le moment. Réessayez dans un instant.';
+  }
+}
+
+function renderFilters(){
+  const el = document.getElementById('filters');
+  el.innerHTML = CATEGORIES.map(c => `
+    <span class="chip" data-key="${c.key}">
+      <span class="dot" style="background:${c.color}"></span>${c.key}
+    </span>
+  `).join('');
+  el.querySelectorAll('.chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const key = chip.dataset.key;
+      if(activeFilters.has(key)){ activeFilters.delete(key); chip.classList.add('off'); }
+      else { activeFilters.add(key); chip.classList.remove('off'); }
+      renderCalendar();
+    });
+  });
+}
+
+function renderMonthSelect(){
+  const el = document.getElementById('monthSelect');
+  const monthsPresent = new Map();
+  EVENTS.forEach(e => {
+    const d = fmtDate(e.start);
+    const key = `${d.getFullYear()}-${d.getMonth()}`;
+    if(!monthsPresent.has(key)) monthsPresent.set(key, `${MOIS_FR[d.getMonth()]} ${d.getFullYear()}`);
+  });
+  let sortedKeys = [...monthsPresent.keys()].sort((a,b) => {
+    const [ya,ma] = a.split('-').map(Number), [yb,mb] = b.split('-').map(Number);
+    return ya-yb || ma-mb;
+  });
+  if(!showPastMonths) sortedKeys = sortedKeys.filter(k => !isPastMonth(k));
+  const options = ['<option value="all">Tous les mois</option>']
+    .concat(sortedKeys.map(k => `<option value="${k}">${monthsPresent.get(k)}</option>`));
+  el.innerHTML = options.join('');
+  el.disabled = sortedKeys.length === 0;
+  if(selectedMonth !== 'all' && !sortedKeys.includes(selectedMonth)) selectedMonth = 'all';
+  el.value = selectedMonth;
+  el.onchange = () => { selectedMonth = el.value; renderCalendar(); };
+}
+
+function renderCalendar(){
+  const cal = document.getElementById('calendar');
+
+  let visible = EVENTS.filter(e => activeFilters.has(e.category));
+  if(!showPastMonths){
+    visible = visible.filter(e => !isPastMonth(`${fmtDate(e.start).getFullYear()}-${fmtDate(e.start).getMonth()}`));
+  }
+  if(selectedMonth !== 'all'){
+    visible = visible.filter(e => {
+      const d = fmtDate(e.start);
+      return `${d.getFullYear()}-${d.getMonth()}` === selectedMonth;
+    });
+  }
+  if(!visible.length){
+    const msg = !showPastMonths
+      ? 'Aucune activité à venir pour ce mois et ces catégories. (Les mois passés sont masqués — case « Afficher les mois passés ».)'
+      : 'Aucune activité pour ce mois et ces catégories.';
+    cal.innerHTML = `<div class="empty">${msg}</div>`;
+    return;
+  }
+
+  const byMonth = {};
+  visible.forEach(e => {
+    const d = fmtDate(e.start);
+    const key = `${d.getFullYear()}-${d.getMonth()}`;
+    (byMonth[key] = byMonth[key] || []).push(e);
+  });
+
+  const monthKeys = Object.keys(byMonth).sort((a,b) => {
+    const [ya,ma] = a.split('-').map(Number), [yb,mb] = b.split('-').map(Number);
+    return ya-yb || ma-mb;
+  });
+
+  cal.innerHTML = monthKeys.map(mk => {
+    const [y,m] = mk.split('-').map(Number);
+    const rows = byMonth[mk].slice().sort((a,b) => a.start.localeCompare(b.start)).map(e => {
+      const start = fmtDate(e.start);
+      const end = fmtDate(e.end);
+      const isToday = TODAY >= e.start && TODAY <= e.end;
+      const cat = CAT_BY_KEY[e.category];
+      const rangeLabel = e.start !== e.end
+        ? `au ${end.getDate()} ${end.getMonth()!==start.getMonth() ? MOIS_FR[end.getMonth()] : ''}`.trim()
+        : '';
+      return `
+        <div class="event-row ${isToday ? 'today' : ''}">
+          <div class="date-badge">
+            <div class="num">${start.getDate()}</div>
+            <div class="dow">${JOURS_FR[start.getDay()]}</div>
+            ${rangeLabel ? `<div class="range">${rangeLabel}</div>` : ''}
+          </div>
+          <div class="event-body">
+            <div class="event-title">${e.text}${isToday ? '<span class="today-flag">AUJOURD\'HUI</span>' : ''}</div>
+            <span class="event-tag" style="background:${lighten(cat.color)};color:${cat.color}">${e.category}</span>
+          </div>
+        </div>
+      `;
+    }).join('');
+    return `
+      <div class="month-group">
+        <div class="month-head">${MOIS_FR[m]} ${y}</div>
+        ${rows}
+      </div>
+    `;
+  }).join('');
+}
+
+document.getElementById('pastToggle').addEventListener('change', (e) => {
+  showPastMonths = e.target.checked;
+  renderMonthSelect();
+  renderCalendar();
+});
+
+chargerEtat();
+</script>
+</body>
+</html>
