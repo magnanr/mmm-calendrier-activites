@@ -84,6 +84,14 @@ const API_URL_ACTIVITES = API_BASE + '/api/activites';
 
 const TODAY = new Date().toISOString().slice(0, 10);
 
+// Les activités à compter de janvier 2027 restent cachées sur la page publique
+// jusqu'au 20 novembre 2026 (demande CA — révélation contrôlée du calendrier
+// d'hiver). Purement côté client : rien à modifier après cette date, l'affichage
+// se débloque tout seul dès que TODAY atteint DATE_REVELATION. Aucun effet sur
+// la page admin, qui continue d'afficher toutes les activités.
+const DATE_REVELATION = '2026-11-20';
+const DATE_MASQUEE_AVANT = '2027-01-01';
+
 let CATEGORIES = [];
 let CAT_BY_KEY = {};
 let EVENTS = [];
@@ -127,6 +135,9 @@ async function chargerEtat(){
     CATEGORIES = etat.categories.map(c => ({ key: c.nom, color: c.couleur }));
     CAT_BY_KEY = Object.fromEntries(CATEGORIES.map(c => [c.key, c]));
     EVENTS = etat.activites.map(a => ({ id: a.id, text: a.titre, category: a.categorie, start: a.date_debut, end: a.date_fin, lieu: a.endroit || '' }));
+    if (TODAY < DATE_REVELATION) {
+      EVENTS = EVENTS.filter(e => e.start < DATE_MASQUEE_AVANT);
+    }
     CATEGORIES.forEach(c => activeFilters.add(c.key));
     document.getElementById('loadErrorBanner').style.display = 'none';
     renderFilters();
