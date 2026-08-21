@@ -122,7 +122,7 @@ async function chargerEtat(){
     const etat = await res.json();
     CATEGORIES = etat.categories.map(c => ({ key: c.nom, color: c.couleur }));
     CAT_BY_KEY = Object.fromEntries(CATEGORIES.map(c => [c.key, c]));
-    EVENTS = etat.activites.map(a => ({ id: a.id, text: a.titre, category: a.categorie, start: a.date_debut, end: a.date_fin }));
+    EVENTS = etat.activites.map(a => ({ id: a.id, text: a.titre, category: a.categorie, start: a.date_debut, end: a.date_fin, lieu: a.endroit || '' }));
     CATEGORIES.forEach(c => activeFilters.add(c.key));
     document.getElementById('loadErrorBanner').style.display = 'none';
     renderFilters();
@@ -228,6 +228,7 @@ function renderCalendar(){
           <div class="event-body">
             <div class="event-title">${e.text}${isToday ? '<span class="today-flag">AUJOURD\'HUI</span>' : ''}</div>
             <span class="event-tag" style="background:${lighten(cat.color)};color:${cat.color}">${e.category}</span>
+            ${e.lieu ? `<div style="font-size:0.72rem;color:var(--muted);margin-top:3px;">${e.lieu}</div>` : ''}
           </div>
         </div>
       `;
