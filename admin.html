@@ -164,6 +164,17 @@
           </select>
         </div>
       </div>
+
+      <div class="field-row" id="seancesBlock">
+        <label>Autres séances (optionnel)</label>
+        <p class="admin-note" style="margin:0 0 8px;">Pour un cours donné en plusieurs dates espacées (ex. 5 séances
+          sur 2-3 mois) : la date de début ci-dessus compte comme la 1re séance, ajoutez les autres ici. Ne pas
+          utiliser ce champ pour une activité qui dure plusieurs jours consécutifs (ex. un salon de 2 jours) —
+          utilisez plutôt « Date de fin » pour ce cas.</p>
+        <div id="seancesContainer"></div>
+        <button type="button" class="secondary" id="addSeanceBtn" style="margin-top:2px;">+ Ajouter une séance</button>
+      </div>
+
       <div class="form-actions">
         <button type="submit" id="fSubmitBtn">Ajouter au calendrier</button>
         <button type="button" class="secondary" id="fCancelBtn" style="display:none;">Annuler la modification</button>
@@ -244,6 +255,40 @@ function fmtDateShort(iso){
   const d = fmtDate(iso);
   return `${d.getDate()} ${MOIS_FR[d.getMonth()].slice(0,3)} ${d.getFullYear()}`;
 }
+function fmtDatesActivite(e){
+  let txt = fmtDateShort(e.start);
+  if(e.end !== e.start) txt += ' → ' + fmtDateShort(e.end);
+  if(e.extra && e.extra.length) txt += ', ' + e.extra.map(fmtDateShort).join(', ');
+  return txt;
+}
+// Une activité = une plage continue (start -> end, ex. un salon de 2 jours) + des séances
+// ponctuelles éventuelles (chacune une seule journée). Sert au calendrier (une ligne par bloc).
+function blocsDe(e){
+  const blocs = [{ start: e.start, end: e.end }];
+  (e.extra || []).forEach(d => blocs.push({ start: d, end: d }));
+  return blocs;
+}
+
+// ---------- Gestion des séances multiples dans le formulaire ----------
+
+function ligneSeanceHtml(valeur){
+  return `<div class="seance-row" style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
+    <input type="date" class="seanceDate" value="${valeur || ''}">
+    <button type="button" class="secondary" data-action="remove-seance" style="padding:6px 10px;">×</button>
+  </div>`;
+}
+function ajouterLigneSeance(valeur){
+  const holder = document.createElement('div');
+  holder.innerHTML = ligneSeanceHtml(valeur);
+  const row = holder.firstElementChild;
+  row.querySelector('[data-action="remove-seance"]').addEventListener('click', () => row.remove());
+  document.getElementById('seancesContainer').appendChild(row);
+}
+function viderSeances(){ document.getElementById('seancesContainer').innerHTML = ''; }
+function seancesSaisies(){
+  return [...document.querySelectorAll('#seancesContainer .seanceDate')].map(i => i.value).filter(Boolean);
+}
+document.getElementById('addSeanceBtn').addEventListener('click', () => ajouterLigneSeance());
 const MOIS_FR = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
 const JOURS_FR = ['dim','lun','mar','mer','jeu','ven','sam'];
 
@@ -252,7 +297,7 @@ const JOURS_FR = ['dim','lun','mar','mer','jeu','ven','sam'];
 function appliquerEtat(etat){
   CATEGORIES = etat.categories.map(c => ({ key: c.nom, color: c.couleur }));
   reindexCategories();
-  EVENTS = etat.activites.map(a => ({ id: a.id, text: a.titre, category: a.categorie, start: a.date_debut, end: a.date_fin, lieu: a.endroit || '' }));
+  EVENTS = etat.activites.map(a => ({ id: a.id, text: a.titre, category: a.categorie, start: a.date_debut, end: a.date_fin, lieu: a.endroit || '', extra: (a.dates_supplementaires || '').split(',').filter(Boolean) }));
   CATEGORIES.forEach(c => { if(!activeFilters.has(c.key)) activeFilters.add(c.key); });
 }
 
@@ -295,8 +340,12 @@ function renderFilters(){
 
 function renderCalendar(){
   const cal = document.getElementById('calendar');
-  const visible = evenementsAffiches().filter(e => activeFilters.has(e.category)).slice().sort((a,b) => a.start.localeCompare(b.start));
-  if(!visible.length){
+  const events = evenementsAffiches().filter(e => activeFilters.has(e.category));
+  // Chaque activité devient une ou plusieurs « occurrences » affichées séparément : sa plage
+  // continue (start -> end) et, s'il y a lieu, une par séance ponctuelle supplémentaire.
+  const occurrences = events.flatMap(e => blocsDe(e).map(b => ({ ...b, text: e.text, category: e.category, lieu: e.lieu })));
+  occurrences.sort((a,b) => a.start.localeCompare(b.start));
+  if(!occurrences.length){
     const msg = showOldEvents
       ? 'Aucune activité pour les catégories sélectionnées.'
       : 'Aucune activité à compter de septembre 2026 pour ces catégories. (Les activités plus anciennes sont masquées — case à cocher en haut de page.)';
@@ -304,10 +353,10 @@ function renderCalendar(){
     return;
   }
   const byMonth = {};
-  visible.forEach(e => {
-    const d = fmtDate(e.start);
+  occurrences.forEach(o => {
+    const d = fmtDate(o.start);
     const key = `${d.getFullYear()}-${d.getMonth()}`;
-    (byMonth[key] = byMonth[key] || []).push(e);
+    (byMonth[key] = byMonth[key] || []).push(o);
   });
 
   const monthKeys = Object.keys(byMonth).sort((a,b) => {
@@ -317,12 +366,12 @@ function renderCalendar(){
 
   cal.innerHTML = monthKeys.map(mk => {
     const [y,m] = mk.split('-').map(Number);
-    const rows = byMonth[mk].map(e => {
-      const start = fmtDate(e.start);
-      const end = fmtDate(e.end);
-      const isToday = TODAY >= e.start && TODAY <= e.end;
-      const cat = CAT_BY_KEY[e.category];
-      const rangeLabel = e.start !== e.end
+    const rows = byMonth[mk].map(o => {
+      const start = fmtDate(o.start);
+      const end = fmtDate(o.end);
+      const isToday = TODAY >= o.start && TODAY <= o.end;
+      const cat = CAT_BY_KEY[o.category];
+      const rangeLabel = o.start !== o.end
         ? `au ${end.getDate()} ${end.getMonth()!==start.getMonth() ? MOIS_FR[end.getMonth()] : ''}`.trim()
         : '';
       return `
@@ -333,9 +382,9 @@ function renderCalendar(){
             ${rangeLabel ? `<div class="range">${rangeLabel}</div>` : ''}
           </div>
           <div class="event-body">
-            <div class="event-title">${e.text}${isToday ? '<span class="today-flag">AUJOURD\'HUI</span>' : ''}</div>
-            <span class="event-tag" style="background:${lighten(cat.color)};color:${cat.color}">${e.category}</span>
-            ${e.lieu ? `<div style="font-size:0.72rem;color:var(--muted);margin-top:3px;">${e.lieu}</div>` : ''}
+            <div class="event-title">${o.text}${isToday ? '<span class="today-flag">AUJOURD\'HUI</span>' : ''}</div>
+            <span class="event-tag" style="background:${lighten(cat.color)};color:${cat.color}">${o.category}</span>
+            ${o.lieu ? `<div style="font-size:0.72rem;color:var(--muted);margin-top:3px;">${o.lieu}</div>` : ''}
           </div>
         </div>
       `;
@@ -364,7 +413,7 @@ function renderAdminTable(){
   const head = '<tr><th>Date</th><th>Titre</th><th>Type</th><th>Endroit</th><th>Actions</th></tr>';
   const body = sorted.map(e => `
     <tr>
-      <td>${fmtDateShort(e.start)}${e.end !== e.start ? ' → ' + fmtDateShort(e.end) : ''}</td>
+      <td>${fmtDatesActivite(e)}</td>
       <td>${e.text}</td>
       <td>${e.category}</td>
       <td>${e.lieu || '—'}</td>
@@ -385,6 +434,7 @@ function renderAdminTable(){
 function resetForm(){
   editingId = null;
   document.getElementById('eventForm').reset();
+  viderSeances();
   document.getElementById('formTitle').textContent = 'Ajouter une activité';
   document.getElementById('fSubmitBtn').textContent = 'Ajouter au calendrier';
   document.getElementById('fCancelBtn').style.display = 'none';
@@ -399,6 +449,8 @@ function startEdit(id){
   document.getElementById('fDebut').value = e.start;
   document.getElementById('fFin').value = e.end !== e.start ? e.end : '';
   document.getElementById('fEndroit').value = e.lieu || '';
+  viderSeances();
+  (e.extra || []).forEach(d => ajouterLigneSeance(d));
   document.getElementById('formTitle').textContent = 'Modifier l\'activité';
   document.getElementById('fSubmitBtn').textContent = 'Enregistrer les modifications';
   document.getElementById('fCancelBtn').style.display = 'inline-block';
@@ -438,6 +490,7 @@ document.getElementById('eventForm').addEventListener('submit', async e => {
   const debut = document.getElementById('fDebut').value;
   const fin = document.getElementById('fFin').value || debut;
   const endroit = document.getElementById('fEndroit').value || null;
+  const datesSupplementaires = seancesSaisies();
   const btn = document.getElementById('fSubmitBtn');
   if(!titre || !debut) return;
   if(fin < debut){ alert('La date de fin doit être après la date de début.'); return; }
@@ -445,8 +498,8 @@ document.getElementById('eventForm').addEventListener('submit', async e => {
   btn.disabled = true;
   try {
     const payload = editingId
-      ? { action: 'modifier', id: editingId, titre, categorie, dateDebut: debut, dateFin: fin, endroit }
-      : { action: 'ajouter', titre, categorie, dateDebut: debut, dateFin: fin, endroit };
+      ? { action: 'modifier', id: editingId, titre, categorie, dateDebut: debut, dateFin: fin, endroit, datesSupplementaires }
+      : { action: 'ajouter', titre, categorie, dateDebut: debut, dateFin: fin, endroit, datesSupplementaires };
     const etat = await appelApi(API_URL_ACTIVITES, payload);
     appliquerEtat(etat);
     resetForm();
@@ -600,10 +653,13 @@ async function exporterExcel(){
         (parJour[key] = parJour[key] || []).push(e);
         d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
       }
+      // Séances ponctuelles supplémentaires (ex. cours en 5 dates espacées) — une seule journée chacune.
+      (e.extra || []).forEach(iso => { (parJour[iso] = parJour[iso] || []).push(e); });
     });
 
-    // Couvre chaque mois entre la première et la dernière activité (même les mois sans rien, pour garder une grille continue).
-    const clesMois = [...new Set(EVENTS.map(e => { const d = fmtDate(e.start); return `${d.getFullYear()}-${d.getMonth()}`; }))]
+    // Couvre chaque mois entre la première et la dernière journée occupée — y compris les séances
+    // supplémentaires — même les mois sans rien, pour garder une grille continue.
+    const clesMois = [...new Set(Object.keys(parJour).map(k => { const [y, m] = k.split('-').map(Number); return `${y}-${m - 1}`; }))]
       .sort((a, b) => { const [ya, ma] = a.split('-').map(Number), [yb, mb] = b.split('-').map(Number); return ya - yb || ma - mb; });
     const [anneeDebut, moisDebut] = clesMois[0].split('-').map(Number);
     const [anneeFin, moisFin] = clesMois[clesMois.length - 1].split('-').map(Number);
