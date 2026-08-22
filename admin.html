@@ -168,9 +168,10 @@
       <div class="field-row" id="seancesBlock">
         <label>Autres séances (optionnel)</label>
         <p class="admin-note" style="margin:0 0 8px;">Pour un cours donné en plusieurs dates espacées (ex. 5 séances
-          sur 2-3 mois) : la date de début ci-dessus compte comme la 1re séance, ajoutez les autres ici. Ne pas
-          utiliser ce champ pour une activité qui dure plusieurs jours consécutifs (ex. un salon de 2 jours) —
-          utilisez plutôt « Date de fin » pour ce cas.</p>
+          sur 2-3 mois) : la date de début ci-dessus compte comme la 1re séance, ajoutez les autres ici. Si une
+          séance a lieu à un endroit différent, choisissez-le dans son menu déroulant — sinon elle reprend
+          l'endroit indiqué plus haut. Ne pas utiliser ce champ pour une activité qui dure plusieurs jours
+          consécutifs (ex. un salon de 2 jours) — utilisez plutôt « Date de fin » pour ce cas.</p>
         <div id="seancesContainer"></div>
         <button type="button" class="secondary" id="addSeanceBtn" style="margin-top:2px;">+ Ajouter une séance</button>
       </div>
@@ -258,35 +259,65 @@ function fmtDateShort(iso){
 function fmtDatesActivite(e){
   let txt = fmtDateShort(e.start);
   if(e.end !== e.start) txt += ' → ' + fmtDateShort(e.end);
-  if(e.extra && e.extra.length) txt += ', ' + e.extra.map(fmtDateShort).join(', ');
+  if(e.extra && e.extra.length){
+    txt += ', ' + e.extra.map(s => {
+      const lieuTxt = s.endroit && s.endroit !== e.lieu ? ` (${s.endroit})` : '';
+      return fmtDateShort(s.date) + lieuTxt;
+    }).join(', ');
+  }
   return txt;
 }
-// Une activité = une plage continue (start -> end, ex. un salon de 2 jours) + des séances
-// ponctuelles éventuelles (chacune une seule journée). Sert au calendrier (une ligne par bloc).
+// dates_supplementaires est stocké en JSON ([{date, endroit}]) depuis l'ajout de l'endroit par
+// séance ; l'ancien format (avant ce changement) était une simple liste de dates séparées par
+// des virgules, sans endroit — on le reconnaît et le convertit à la volée pour ne pas perdre
+// les séances déjà saisies.
+function parseDatesSupplementaires(raw){
+  if(!raw) return [];
+  try {
+    const val = JSON.parse(raw);
+    if(Array.isArray(val)) return val.filter(x => x && x.date).map(x => ({ date: x.date, endroit: x.endroit || null }));
+  } catch(err) {
+    return raw.split(',').filter(Boolean).map(date => ({ date, endroit: null }));
+  }
+  return [];
+}
+// Une activité = une plage continue (start -> end, ex. un salon de 2 jours, un seul endroit) +
+// des séances ponctuelles éventuelles (chacune une seule journée, avec son propre endroit si
+// précisé, sinon celui de l'activité). Sert au calendrier (une ligne par bloc) et à l'export Excel.
 function blocsDe(e){
-  const blocs = [{ start: e.start, end: e.end }];
-  (e.extra || []).forEach(d => blocs.push({ start: d, end: d }));
+  const blocs = [{ start: e.start, end: e.end, lieu: e.lieu }];
+  (e.extra || []).forEach(s => blocs.push({ start: s.date, end: s.date, lieu: s.endroit || e.lieu }));
   return blocs;
 }
 
 // ---------- Gestion des séances multiples dans le formulaire ----------
 
+function optionsEndroitSeance(){
+  // Reprend les mêmes choix que le menu Endroit principal, pour ne jamais désynchroniser les deux.
+  const opts = [...document.getElementById('fEndroit').options].filter(o => o.value);
+  return `<option value="">— Même endroit que ci-dessus —</option>` +
+    opts.map(o => `<option value="${o.value}">${o.textContent}</option>`).join('');
+}
 function ligneSeanceHtml(valeur){
-  return `<div class="seance-row" style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
+  return `<div class="seance-row" style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap;">
     <input type="date" class="seanceDate" value="${valeur || ''}">
+    <select class="seanceEndroit" style="flex:1;min-width:220px;">${optionsEndroitSeance()}</select>
     <button type="button" class="secondary" data-action="remove-seance" style="padding:6px 10px;">×</button>
   </div>`;
 }
-function ajouterLigneSeance(valeur){
+function ajouterLigneSeance(valeur, endroit){
   const holder = document.createElement('div');
   holder.innerHTML = ligneSeanceHtml(valeur);
   const row = holder.firstElementChild;
+  if(endroit) row.querySelector('.seanceEndroit').value = endroit;
   row.querySelector('[data-action="remove-seance"]').addEventListener('click', () => row.remove());
   document.getElementById('seancesContainer').appendChild(row);
 }
 function viderSeances(){ document.getElementById('seancesContainer').innerHTML = ''; }
 function seancesSaisies(){
-  return [...document.querySelectorAll('#seancesContainer .seanceDate')].map(i => i.value).filter(Boolean);
+  return [...document.querySelectorAll('#seancesContainer .seance-row')]
+    .map(row => ({ date: row.querySelector('.seanceDate').value, endroit: row.querySelector('.seanceEndroit').value || null }))
+    .filter(s => s.date);
 }
 document.getElementById('addSeanceBtn').addEventListener('click', () => ajouterLigneSeance());
 const MOIS_FR = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
@@ -297,7 +328,7 @@ const JOURS_FR = ['dim','lun','mar','mer','jeu','ven','sam'];
 function appliquerEtat(etat){
   CATEGORIES = etat.categories.map(c => ({ key: c.nom, color: c.couleur }));
   reindexCategories();
-  EVENTS = etat.activites.map(a => ({ id: a.id, text: a.titre, category: a.categorie, start: a.date_debut, end: a.date_fin, lieu: a.endroit || '', extra: (a.dates_supplementaires || '').split(',').filter(Boolean) }));
+  EVENTS = etat.activites.map(a => ({ id: a.id, text: a.titre, category: a.categorie, start: a.date_debut, end: a.date_fin, lieu: a.endroit || '', extra: parseDatesSupplementaires(a.dates_supplementaires) }));
   CATEGORIES.forEach(c => { if(!activeFilters.has(c.key)) activeFilters.add(c.key); });
 }
 
@@ -343,7 +374,7 @@ function renderCalendar(){
   const events = evenementsAffiches().filter(e => activeFilters.has(e.category));
   // Chaque activité devient une ou plusieurs « occurrences » affichées séparément : sa plage
   // continue (start -> end) et, s'il y a lieu, une par séance ponctuelle supplémentaire.
-  const occurrences = events.flatMap(e => blocsDe(e).map(b => ({ ...b, text: e.text, category: e.category, lieu: e.lieu })));
+  const occurrences = events.flatMap(e => blocsDe(e).map(b => ({ ...b, text: e.text, category: e.category })));
   occurrences.sort((a,b) => a.start.localeCompare(b.start));
   if(!occurrences.length){
     const msg = showOldEvents
@@ -450,7 +481,7 @@ function startEdit(id){
   document.getElementById('fFin').value = e.end !== e.start ? e.end : '';
   document.getElementById('fEndroit').value = e.lieu || '';
   viderSeances();
-  (e.extra || []).forEach(d => ajouterLigneSeance(d));
+  (e.extra || []).forEach(s => ajouterLigneSeance(s.date, s.endroit));
   document.getElementById('formTitle').textContent = 'Modifier l\'activité';
   document.getElementById('fSubmitBtn').textContent = 'Enregistrer les modifications';
   document.getElementById('fCancelBtn').style.display = 'inline-block';
@@ -644,17 +675,19 @@ async function exporterExcel(){
   try {
     // Toujours l'ensemble complet des activités, peu importe les filtres/cases cochées à l'écran —
     // Michel veut voir « l'ensemble du calendrier ».
-    const parJour = {}; // 'AAAA-MM-JJ' -> [activités qui couvrent ce jour]
+    const parJour = {}; // 'AAAA-MM-JJ' -> [{ text, lieu, category }] pour ce jour
     EVENTS.forEach(e => {
-      let d = fmtDate(e.start);
-      const fin = fmtDate(e.end);
-      while(d <= fin){
-        const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-        (parJour[key] = parJour[key] || []).push(e);
-        d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
-      }
-      // Séances ponctuelles supplémentaires (ex. cours en 5 dates espacées) — une seule journée chacune.
-      (e.extra || []).forEach(iso => { (parJour[iso] = parJour[iso] || []).push(e); });
+      // blocsDe() résout déjà, pour chaque séance ponctuelle, son propre endroit (ou celui de
+      // l'activité par défaut) — on réutilise donc la même logique qu'à l'écran pour l'Excel.
+      blocsDe(e).forEach(bloc => {
+        let d = fmtDate(bloc.start);
+        const fin = fmtDate(bloc.end);
+        while(d <= fin){
+          const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+          (parJour[key] = parJour[key] || []).push({ text: e.text, lieu: bloc.lieu, category: e.category });
+          d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
+        }
+      });
     });
 
     // Couvre chaque mois entre la première et la dernière journée occupée — y compris les séances
