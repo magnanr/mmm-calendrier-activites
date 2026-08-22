@@ -126,11 +126,25 @@ function isPastMonth(key){
   const [yc,mc] = currentMonthKey().split('-').map(Number);
   return ya < yc || (ya === yc && ma < mc);
 }
-// Une activité = une plage continue (start -> end, ex. un salon de 2 jours) + des séances
-// ponctuelles éventuelles (ex. un cours en 5 dates espacées), chacune une seule journée.
+// dates_supplementaires est stocké en JSON ([{date, endroit}]) depuis l'ajout de l'endroit par
+// séance ; l'ancien format était une simple liste de dates séparées par des virgules, sans
+// endroit — on le reconnaît et le convertit à la volée.
+function parseDatesSupplementaires(raw){
+  if(!raw) return [];
+  try {
+    const val = JSON.parse(raw);
+    if(Array.isArray(val)) return val.filter(x => x && x.date).map(x => ({ date: x.date, endroit: x.endroit || null }));
+  } catch(err) {
+    return raw.split(',').filter(Boolean).map(date => ({ date, endroit: null }));
+  }
+  return [];
+}
+// Une activité = une plage continue (start -> end, ex. un salon de 2 jours, un seul endroit) +
+// des séances ponctuelles éventuelles (ex. un cours en 5 dates espacées), chacune une seule
+// journée, avec son propre endroit si précisé, sinon celui de l'activité.
 function blocsDe(e){
-  const blocs = [{ start: e.start, end: e.end }];
-  (e.extra || []).forEach(d => blocs.push({ start: d, end: d }));
+  const blocs = [{ start: e.start, end: e.end, lieu: e.lieu }];
+  (e.extra || []).forEach(s => blocs.push({ start: s.date, end: s.date, lieu: s.endroit || e.lieu }));
   return blocs;
 }
 
@@ -141,7 +155,7 @@ async function chargerEtat(){
     const etat = await res.json();
     CATEGORIES = etat.categories.map(c => ({ key: c.nom, color: c.couleur }));
     CAT_BY_KEY = Object.fromEntries(CATEGORIES.map(c => [c.key, c]));
-    EVENTS = etat.activites.map(a => ({ id: a.id, text: a.titre, category: a.categorie, start: a.date_debut, end: a.date_fin, lieu: a.endroit || '', extra: (a.dates_supplementaires || '').split(',').filter(Boolean) }));
+    EVENTS = etat.activites.map(a => ({ id: a.id, text: a.titre, category: a.categorie, start: a.date_debut, end: a.date_fin, lieu: a.endroit || '', extra: parseDatesSupplementaires(a.dates_supplementaires) }));
     if (TODAY < DATE_REVELATION) {
       EVENTS = EVENTS.filter(e => e.start < DATE_MASQUEE_AVANT);
     }
@@ -205,7 +219,7 @@ function renderCalendar(){
   const events = EVENTS.filter(e => activeFilters.has(e.category));
   // Chaque activité devient une ou plusieurs « occurrences » affichées séparément : sa plage
   // continue (start -> end) et, s'il y a lieu, une par séance ponctuelle supplémentaire.
-  let occurrences = events.flatMap(e => blocsDe(e).map(b => ({ ...b, text: e.text, category: e.category, lieu: e.lieu })));
+  let occurrences = events.flatMap(e => blocsDe(e).map(b => ({ ...b, text: e.text, category: e.category })));
   if(!showPastMonths){
     occurrences = occurrences.filter(o => !isPastMonth(`${fmtDate(o.start).getFullYear()}-${fmtDate(o.start).getMonth()}`));
   }
