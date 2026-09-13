@@ -7,7 +7,7 @@
 <style>
   :root{
     --ink:#1f2933; --muted:#5a6672; --line:#dde3e8; --bg:#f7f8fa; --panel:#ffffff;
-    --today-bg:#fff8e6; --today-line:#e8d38a; --warn:#b5471b; --warn-bg:#fdece3;
+    --today-bg:#fff8e6; --today-line:#e8d38a; --warn:#b5471b; --warn-bg:#fdece3; --accent:#2f6f4f;
   }
   *{box-sizing:border-box;}
   body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);line-height:1.4;}
@@ -43,6 +43,9 @@
   .event-title{font-size:0.92rem;font-weight:500;}
   .event-tag{display:inline-block;margin-top:4px;font-size:0.72rem;padding:2px 8px;border-radius:5px;}
   .today-flag{font-size:0.7rem;font-weight:700;color:#a8621b;margin-left:6px;}
+  .btn-inscription{display:inline-block;margin-top:6px;padding:5px 12px;border-radius:6px;background:var(--accent);
+        color:#fff;font-size:0.76rem;font-weight:600;text-decoration:none;}
+  .btn-inscription:hover{opacity:0.88;}
 
   .empty{color:var(--muted);font-size:0.88rem;padding:20px 0;text-align:center;}
   footer{color:var(--muted);font-size:0.78rem;margin-top:30px;border-top:1px solid var(--line);padding-top:14px;}
@@ -81,6 +84,11 @@
 <script>
 const API_BASE = 'https://mmm-calendrier-api.roch-magnan.workers.dev';
 const API_URL_ACTIVITES = API_BASE + '/api/activites';
+
+// Catégorie des Vendredis MMM (soirées-conférences publiques) : un bouton « S'inscrire » est
+// affiché pour toute activité de cette catégorie, pointant vers la page Événements du site.
+const CATEGORIE_INSCRIPTION = 'Soirées MMM et conférences';
+const URL_INSCRIPTION_EVENEMENTS = 'https://www.moucheurs-mtl-metro.org/fr/evenements-public';
 
 const TODAY = new Date().toISOString().slice(0, 10);
 
@@ -270,6 +278,7 @@ function renderCalendar(){
             <div class="event-title">${o.text}${isToday ? '<span class="today-flag">AUJOURD\'HUI</span>' : ''}</div>
             <span class="event-tag" style="background:${lighten(cat.color)};color:${cat.color}">${o.category}</span>
             ${o.lieu ? `<div style="font-size:0.72rem;color:var(--muted);margin-top:3px;">${o.lieu}</div>` : ''}
+            ${o.category === CATEGORIE_INSCRIPTION ? `<a href="${URL_INSCRIPTION_EVENEMENTS}" target="_blank" rel="noopener" class="btn-inscription">S'inscrire →</a>` : ''}
           </div>
         </div>
       `;
