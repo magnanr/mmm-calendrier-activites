@@ -39,6 +39,9 @@
   .event-title{font-size:0.92rem;font-weight:500;}
   .event-tag{display:inline-block;margin-top:4px;font-size:0.72rem;padding:2px 8px;border-radius:5px;}
   .today-flag{font-size:0.7rem;font-weight:700;color:#a8621b;margin-left:6px;}
+  .btn-inscription{display:inline-block;margin-top:6px;padding:5px 12px;border-radius:6px;background:var(--accent);
+        color:#fff;font-size:0.76rem;font-weight:600;text-decoration:none;}
+  .btn-inscription:hover{opacity:0.88;}
 
   .empty{color:var(--muted);font-size:0.88rem;padding:20px 0;text-align:center;}
   footer{color:var(--muted);font-size:0.78rem;margin-top:30px;border-top:1px solid var(--line);padding-top:14px;}
@@ -214,6 +217,12 @@
 const API_BASE = 'https://mmm-calendrier-api.roch-magnan.workers.dev';
 const API_URL_ACTIVITES = API_BASE + '/api/activites';
 const API_URL_CATEGORIES = API_BASE + '/api/categories';
+
+// Catégorie des Vendredis MMM (soirées-conférences publiques) : un bouton « S'inscrire » est
+// affiché dans l'aperçu public pour toute activité de cette catégorie, pointant vers la page
+// Événements du site — voir renderCalendar(). Rien d'autre à configurer par activité.
+const CATEGORIE_INSCRIPTION = 'Soirées MMM et conférences';
+const URL_INSCRIPTION_EVENEMENTS = 'https://www.moucheurs-mtl-metro.org/fr/evenements-public';
 
 const TODAY = new Date().toISOString().slice(0, 10);
 
@@ -416,6 +425,7 @@ function renderCalendar(){
             <div class="event-title">${o.text}${isToday ? '<span class="today-flag">AUJOURD\'HUI</span>' : ''}</div>
             <span class="event-tag" style="background:${lighten(cat.color)};color:${cat.color}">${o.category}</span>
             ${o.lieu ? `<div style="font-size:0.72rem;color:var(--muted);margin-top:3px;">${o.lieu}</div>` : ''}
+            ${o.category === CATEGORIE_INSCRIPTION ? `<a href="${URL_INSCRIPTION_EVENEMENTS}" target="_blank" rel="noopener" class="btn-inscription">S'inscrire →</a>` : ''}
           </div>
         </div>
       `;
