@@ -42,6 +42,9 @@
   .btn-inscription{display:inline-block;margin-top:6px;padding:5px 12px;border-radius:6px;background:var(--accent);
         color:#fff;font-size:0.76rem;font-weight:600;text-decoration:none;}
   .btn-inscription:hover{opacity:0.88;}
+  .membres-note{display:inline-block;margin-left:8px;font-size:0.72rem;color:var(--muted);font-style:italic;}
+  .membres-check{display:inline-flex;align-items:center;gap:8px;font-size:0.9rem;color:var(--ink);cursor:pointer;user-select:none;}
+  .membres-check input{width:auto;padding:0;cursor:pointer;}
 
   .empty{color:var(--muted);font-size:0.88rem;padding:20px 0;text-align:center;}
   footer{color:var(--muted);font-size:0.78rem;margin-top:30px;border-top:1px solid var(--line);padding-top:14px;}
@@ -179,6 +182,16 @@
         <button type="button" class="secondary" id="addSeanceBtn" style="margin-top:2px;">+ Ajouter une séance</button>
       </div>
 
+      <div class="field-row">
+        <label class="membres-check" for="fMembres">
+          <input type="checkbox" id="fMembres">
+          Réservé aux membres en règle
+        </label>
+        <p class="admin-note" style="margin:0;">Si cochée, le bouton « S'inscrire » de cette activité mène à la page
+          Événements réservée aux membres au lieu de la page publique. Le bouton n'apparaît que pour la catégorie
+          « Soirées MMM et conférences ».</p>
+      </div>
+
       <div class="form-actions">
         <button type="submit" id="fSubmitBtn">Ajouter au calendrier</button>
         <button type="button" class="secondary" id="fCancelBtn" style="display:none;">Annuler la modification</button>
@@ -223,6 +236,9 @@ const API_URL_CATEGORIES = API_BASE + '/api/categories';
 // Événements du site — voir renderCalendar(). Rien d'autre à configurer par activité.
 const CATEGORIE_INSCRIPTION = 'Soirées MMM et conférences';
 const URL_INSCRIPTION_EVENEMENTS = 'https://www.moucheurs-mtl-metro.org/fr/evenements-public';
+// Activités cochées « Réservé aux membres » (colonne membres_seulement) : le bouton mène à la page
+// Événements réservée aux membres en règle plutôt qu'à la page publique.
+const URL_INSCRIPTION_MEMBRES = 'https://www.moucheurs-mtl-metro.org/fr/evenements-membres';
 
 const TODAY = new Date().toISOString().slice(0, 10);
 
@@ -337,7 +353,7 @@ const JOURS_FR = ['dim','lun','mar','mer','jeu','ven','sam'];
 function appliquerEtat(etat){
   CATEGORIES = etat.categories.map(c => ({ key: c.nom, color: c.couleur }));
   reindexCategories();
-  EVENTS = etat.activites.map(a => ({ id: a.id, text: a.titre, category: a.categorie, start: a.date_debut, end: a.date_fin, lieu: a.endroit || '', extra: parseDatesSupplementaires(a.dates_supplementaires) }));
+  EVENTS = etat.activites.map(a => ({ id: a.id, text: a.titre, category: a.categorie, start: a.date_debut, end: a.date_fin, lieu: a.endroit || '', extra: parseDatesSupplementaires(a.dates_supplementaires), membres: Number(a.membres_seulement) === 1 }));
   CATEGORIES.forEach(c => { if(!activeFilters.has(c.key)) activeFilters.add(c.key); });
 }
 
@@ -383,7 +399,7 @@ function renderCalendar(){
   const events = evenementsAffiches().filter(e => activeFilters.has(e.category));
   // Chaque activité devient une ou plusieurs « occurrences » affichées séparément : sa plage
   // continue (start -> end) et, s'il y a lieu, une par séance ponctuelle supplémentaire.
-  const occurrences = events.flatMap(e => blocsDe(e).map(b => ({ ...b, text: e.text, category: e.category })));
+  const occurrences = events.flatMap(e => blocsDe(e).map(b => ({ ...b, text: e.text, category: e.category, membres: e.membres })));
   occurrences.sort((a,b) => a.start.localeCompare(b.start));
   if(!occurrences.length){
     const msg = showOldEvents
@@ -425,7 +441,7 @@ function renderCalendar(){
             <div class="event-title">${o.text}${isToday ? '<span class="today-flag">AUJOURD\'HUI</span>' : ''}</div>
             <span class="event-tag" style="background:${lighten(cat.color)};color:${cat.color}">${o.category}</span>
             ${o.lieu ? `<div style="font-size:0.72rem;color:var(--muted);margin-top:3px;">${o.lieu}</div>` : ''}
-            ${o.category === CATEGORIE_INSCRIPTION ? `<a href="${URL_INSCRIPTION_EVENEMENTS}" target="_blank" rel="noopener" class="btn-inscription">S'inscrire →</a>` : ''}
+            ${o.category === CATEGORIE_INSCRIPTION ? `<a href="${o.membres ? URL_INSCRIPTION_MEMBRES : URL_INSCRIPTION_EVENEMENTS}" target="_blank" rel="noopener" class="btn-inscription">S'inscrire →</a>${o.membres ? '<span class="membres-note">Réservé aux membres en règle</span>' : ''}` : ''}
           </div>
         </div>
       `;
@@ -456,7 +472,7 @@ function renderAdminTable(){
     <tr>
       <td>${fmtDatesActivite(e)}</td>
       <td>${e.text}</td>
-      <td>${e.category}</td>
+      <td>${e.category}${e.membres ? '<div style="font-size:0.72rem;color:var(--accent);font-weight:600;">Membres seulement</div>' : ''}</td>
       <td>${e.lieu || '—'}</td>
       <td class="actions">
         <button type="button" data-action="edit" data-id="${e.id}">Modifier</button>
@@ -491,6 +507,7 @@ function startEdit(id){
   document.getElementById('fFin').value = e.end !== e.start ? e.end : '';
   document.getElementById('fEndroit').value = e.lieu || '';
   viderSeances();
+  document.getElementById('fMembres').checked = !!e.membres;
   (e.extra || []).forEach(s => ajouterLigneSeance(s.date, s.endroit));
   document.getElementById('formTitle').textContent = 'Modifier l\'activité';
   document.getElementById('fSubmitBtn').textContent = 'Enregistrer les modifications';
@@ -532,6 +549,7 @@ document.getElementById('eventForm').addEventListener('submit', async e => {
   const fin = document.getElementById('fFin').value || debut;
   const endroit = document.getElementById('fEndroit').value || null;
   const datesSupplementaires = seancesSaisies();
+  const membresSeulement = document.getElementById('fMembres').checked;
   const btn = document.getElementById('fSubmitBtn');
   if(!titre || !debut) return;
   if(fin < debut){ alert('La date de fin doit être après la date de début.'); return; }
@@ -539,8 +557,8 @@ document.getElementById('eventForm').addEventListener('submit', async e => {
   btn.disabled = true;
   try {
     const payload = editingId
-      ? { action: 'modifier', id: editingId, titre, categorie, dateDebut: debut, dateFin: fin, endroit, datesSupplementaires }
-      : { action: 'ajouter', titre, categorie, dateDebut: debut, dateFin: fin, endroit, datesSupplementaires };
+      ? { action: 'modifier', id: editingId, titre, categorie, dateDebut: debut, dateFin: fin, endroit, datesSupplementaires, membresSeulement }
+      : { action: 'ajouter', titre, categorie, dateDebut: debut, dateFin: fin, endroit, datesSupplementaires, membresSeulement };
     const etat = await appelApi(API_URL_ACTIVITES, payload);
     appliquerEtat(etat);
     resetForm();
